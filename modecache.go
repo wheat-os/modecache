@@ -235,7 +235,7 @@ var (
 )
 
 // Wrap 控制器封装方法，创建默认的控制器, 注意 name 只能够对应一个缓存 T 如果，冲突创建，会引发错误
-// 该方法默认使用 PolicyWarp 策略，尽可能兼容 L2 的使用，如果需要使用更丰富的类型，应该使用 NewCacheController 来创建自定义的缓存控制器
+// 该方法默认使用 PolicyWarp 策略,应该使用 NewCacheController 来创建自定义的缓存控制器
 // 使用缓存策略 EasyPloy(15 * time.Second)
 func Wrap[T any](ctx context.Context, name string, store Store, key string, query Query[T]) (T, error) {
 	ctrIntr, ok := ctrStore.Load(name)
@@ -345,7 +345,7 @@ func WrapForReuseIgnoreErrorWithTTL[T any](ctx context.Context, store Store, key
 	return *new(T), fmt.Errorf("unable to create a new cache controller, named to be used; name:%s, loadedType:%T", name, ctrIntr)
 }
 
-// WrapWithTTL
+// WrapWithTTL 简单的缓存策略，当 query 执行失败时，直接返回错误。
 func WrapWithTTL[T any](ctx context.Context, store Store, key string, ttl time.Duration, query Query[T]) (T, error) {
 	name := fmt.Sprintf("library-modecache-easy-default-%T", new(T))
 
