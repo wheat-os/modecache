@@ -20,6 +20,7 @@ var (
 	ErrKeyNonExistent  = errors.New("modecache: key does not exist")    // ErrKeyNonExistent 缓存键不存在。
 	ErrUnpackingFailed = errors.New("modecache: warp unpacking failed") // warp 拆箱失败。
 	ErrNil             = errors.New("null pointer")                     // Nil 空指针。
+	ErrCircuitOpen     = errors.New("modecache: circuit breaker open")  // ErrCircuitOpen 熔断器开启。
 )
 
 type (
@@ -122,15 +123,18 @@ func (c *CacheCtr[T]) GetStore(ctx context.Context, key string) (T, int, error) 
 	if store.IsDirectStore() {
 		cBox, ok := value.(*AbcBox[T])
 		if !ok {
+			LogErrorf(ctx, "GetStore: assert type to abcBox fail, key=%s, name=%s, actualType=%T", key, c.Name, value)
 			return *new(T), 0, fmt.Errorf("%w: assert type to abcBox fail", ErrUnpackingFailed)
 		}
 		box = cBox
 	} else {
 		strVal, ok := value.(string)
 		if !ok {
+			LogErrorf(ctx, "GetStore: directStore need string but got %T, key=%s, name=%s", value, key, c.Name)
 			return *new(T), 0, fmt.Errorf("%w: directStore need string but got %s", ErrUnpackingFailed, fmt.Sprintf("%T", strVal))
 		}
 		if err = sonic.Unmarshal([]byte(strVal), box); err != nil {
+			LogErrorf(ctx, "GetStore: directStore unmarshal to abcBox fail, key=%s, name=%s, err=%v", key, c.Name, err)
 			return *new(T), 0, fmt.Errorf("%w: directStore unmarshal to abcBox fail, %w", ErrUnpackingFailed, err)
 		}
 	}
@@ -154,7 +158,8 @@ func (c *CacheCtr[T]) Wrap(ctx context.Context, key string, query Query[T]) (p T
 	}
 	v, ok := result.(T)
 	if !ok {
-		return p, errors.WithMessage(ErrUnpackingFailed, "pares for T error")
+		LogErrorf(ctx, "Wrap: parse for T error, key=%s, name=%s, actualType=%T", key, c.Name, result)
+		return p, errors.WithMessage(ErrUnpackingFailed, "parse for T error")
 	}
 	return v, nil
 }
