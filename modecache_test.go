@@ -344,6 +344,9 @@ func (s snakeCache) Get(ctx context.Context, key string) (any, error) {
 }
 
 func (s snakeCache) Set(ctx context.Context, key string, data any, ttl time.Duration) error {
+	if s.isErr {
+		return errors.New("test err")
+	}
 	return nil
 }
 
@@ -604,4 +607,346 @@ func TestUseContextStoreWrapConcurrency(t *testing.T) {
 		})
 	}
 
+}
+
+// TestSetStore 测试 SetStore 函数
+func TestSetStore(t *testing.T) {
+	lc := getTestLocalCache()
+	store := NewCacheStore(lc)
+	ctx := context.Background()
+
+	type testCase[T any] struct {
+		name    string
+		key     string
+		value   T
+		ttl     time.Duration
+		wantErr bool
+	}
+
+	tests := []testCase[string]{
+		{
+			name:    "设置字符串缓存-永久",
+			key:     "test_string_forever",
+			value:   "hello world",
+			ttl:     KeepTTL,
+			wantErr: false,
+		},
+		{
+			name:    "设置字符串缓存-有过期时间",
+			key:     "test_string_ttl",
+			value:   "hello ttl",
+			ttl:     time.Minute,
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// 清理之前的缓存
+			_ = store.Del(ctx, tt.key)
+
+			err := SetStore(ctx, store, tt.key, tt.value, tt.ttl)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("SetStore() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			// 验证缓存是否设置成功
+			if !tt.wantErr {
+				got, err := store.Get(ctx, tt.key)
+				if err != nil {
+					t.Errorf("Failed to get stored value: %v", err)
+					return
+				}
+
+				// 由于 IsDirectStore() 返回 true，存储的应该是 AbcBox 结构
+				box, ok := got.(*AbcBox[string])
+				if !ok {
+					t.Errorf("Expected *AbcBox[string], got %T", got)
+					return
+				}
+
+				if box.T != tt.value {
+					t.Errorf("SetStore() stored value = %v, want %v", box.T, tt.value)
+				}
+
+				// 验证时间戳不为零
+				if box.Timestamp == 0 {
+					t.Error("SetStore() timestamp should not be zero")
+				}
+			}
+		})
+	}
+
+	// 测试其他数据类型
+	t.Run("设置整数缓存", func(t *testing.T) {
+		key := "test_int"
+		value := 42
+		_ = store.Del(ctx, key)
+
+		err := SetStore(ctx, store, key, value, time.Minute)
+		require.NoError(t, err)
+
+		got, err := store.Get(ctx, key)
+		require.NoError(t, err)
+
+		box, ok := got.(*AbcBox[int])
+		require.True(t, ok)
+		require.Equal(t, value, box.T)
+	})
+
+	t.Run("设置结构体缓存", func(t *testing.T) {
+		key := "test_struct"
+		value := struct {
+			Name string
+			Age  int
+		}{
+			Name: "test",
+			Age:  25,
+		}
+		_ = store.Del(ctx, key)
+
+		err := SetStore(ctx, store, key, value, time.Minute)
+		require.NoError(t, err)
+
+		got, err := store.Get(ctx, key)
+		require.NoError(t, err)
+
+		box, ok := got.(*AbcBox[struct {
+			Name string
+			Age  int
+		}])
+		require.True(t, ok)
+		require.Equal(t, value, box.T)
+	})
+}
+
+// TestGetStore 测试 GetStore 函数
+func TestGetStore(t *testing.T) {
+	lc := getTestLocalCache()
+	store := NewCacheStore(lc)
+	ctx := context.Background()
+
+	// 先准备一些测试数据
+	testString := "hello world"
+	testInt := 42
+	testStruct := struct {
+		Name string
+		Age  int
+	}{
+		Name: "test",
+		Age:  25,
+	}
+
+	// 设置测试数据
+	stringBox := &AbcBox[string]{
+		T:         testString,
+		Timestamp: int(time.Now().Unix()),
+	}
+	intBox := &AbcBox[int]{
+		T:         testInt,
+		Timestamp: int(time.Now().Unix()),
+	}
+	structBox := &AbcBox[struct {
+		Name string
+		Age  int
+	}]{
+		T:         testStruct,
+		Timestamp: int(time.Now().Unix()),
+	}
+
+	_ = store.Set(ctx, "test_string", stringBox, time.Minute)
+	_ = store.Set(ctx, "test_int", intBox, time.Minute)
+	_ = store.Set(ctx, "test_struct", structBox, time.Minute)
+
+	type testCase[T any] struct {
+		name        string
+		key         string
+		expectedT   T
+		wantErr     bool
+		expectZero  bool // 是否期望零值
+		compareFunc func(T, T) bool
+	}
+
+	tests := []testCase[string]{
+		{
+			name:        "获取字符串缓存",
+			key:         "test_string",
+			expectedT:   testString,
+			wantErr:     false,
+			compareFunc: func(a, b string) bool { return a == b },
+		},
+		{
+			name:        "获取不存在的键",
+			key:         "non_existent_key",
+			expectedT:   "",
+			wantErr:     true,
+			expectZero:  true,
+			compareFunc: func(a, b string) bool { return a == b },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, timestamp, err := GetStore[string](ctx, store, tt.key)
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("GetStore() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if tt.wantErr {
+				if !tt.expectZero {
+					t.Error("Expected error but got non-zero value")
+				}
+				return
+			}
+
+			if !tt.compareFunc(got, tt.expectedT) {
+				t.Errorf("GetStore() = %v, want %v", got, tt.expectedT)
+			}
+
+			if timestamp == 0 {
+				t.Error("GetStore() timestamp should not be zero")
+			}
+		})
+	}
+
+	// 测试整数类型
+	t.Run("获取整数缓存", func(t *testing.T) {
+		got, timestamp, err := GetStore[int](ctx, store, "test_int")
+		require.NoError(t, err)
+		require.Equal(t, testInt, got)
+		require.NotZero(t, timestamp)
+	})
+
+	// 测试结构体类型
+	t.Run("获取结构体缓存", func(t *testing.T) {
+		got, timestamp, err := GetStore[struct {
+			Name string
+			Age  int
+		}](ctx, store, "test_struct")
+		require.NoError(t, err)
+		require.Equal(t, testStruct, got)
+		require.NotZero(t, timestamp)
+	})
+}
+
+// TestSetStoreAndGetStoreIntegration 测试 SetStore 和 GetStore 集成
+func TestSetStoreAndGetStoreIntegration(t *testing.T) {
+	lc := getTestLocalCache()
+	store := NewCacheStore(lc)
+	ctx := context.Background()
+
+	type testData struct {
+		ID   int
+		Name string
+	}
+
+	testCases := []struct {
+		name  string
+		key   string
+		value any
+		ttl   time.Duration
+	}{
+		{
+			name:  "字符串类型",
+			key:   "integration_string",
+			value: "integration test",
+			ttl:   time.Minute,
+		},
+		{
+			name:  "整数类型",
+			key:   "integration_int",
+			value: 12345,
+			ttl:   time.Minute,
+		},
+		{
+			name:  "布尔类型",
+			key:   "integration_bool",
+			value: true,
+			ttl:   time.Minute,
+		},
+		{
+			name:  "结构体类型",
+			key:   "integration_struct",
+			value: testData{ID: 1, Name: "test"},
+			ttl:   time.Minute,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_ = store.Del(ctx, tc.key)
+
+			switch v := tc.value.(type) {
+			case string:
+				// 设置
+				err := SetStore(ctx, store, tc.key, v, tc.ttl)
+				require.NoError(t, err)
+
+				// 获取
+				got, timestamp, err := GetStore[string](ctx, store, tc.key)
+				require.NoError(t, err)
+				require.Equal(t, v, got)
+				require.NotZero(t, timestamp)
+
+			case int:
+				// 设置
+				err := SetStore(ctx, store, tc.key, v, tc.ttl)
+				require.NoError(t, err)
+
+				// 获取
+				got, timestamp, err := GetStore[int](ctx, store, tc.key)
+				require.NoError(t, err)
+				require.Equal(t, v, got)
+				require.NotZero(t, timestamp)
+
+			case bool:
+				// 设置
+				err := SetStore(ctx, store, tc.key, v, tc.ttl)
+				require.NoError(t, err)
+
+				// 获取
+				got, timestamp, err := GetStore[bool](ctx, store, tc.key)
+				require.NoError(t, err)
+				require.Equal(t, v, got)
+				require.NotZero(t, timestamp)
+
+			case testData:
+				// 设置
+				err := SetStore(ctx, store, tc.key, v, tc.ttl)
+				require.NoError(t, err)
+
+				// 获取
+				got, timestamp, err := GetStore[testData](ctx, store, tc.key)
+				require.NoError(t, err)
+				require.Equal(t, v, got)
+				require.NotZero(t, timestamp)
+			}
+		})
+	}
+}
+
+// TestSetStoreGetStoreWithNilStore 测试使用 nil store 的错误情况
+func TestSetStoreGetStoreWithNilStore(t *testing.T) {
+	ctx := context.Background()
+
+	// 使用一个总是返回错误的 mock store
+	errorStore := snakeCache{
+		result: nil,
+		isErr:  true,
+	}
+
+	t.Run("SetStore with error store", func(t *testing.T) {
+		err := SetStore(ctx, errorStore, "test_key", "test_value", time.Minute)
+		require.Error(t, err)
+	})
+
+	t.Run("GetStore with error store", func(t *testing.T) {
+		got, timestamp, err := GetStore[string](ctx, errorStore, "test_key")
+		require.Error(t, err)
+		require.Equal(t, "", got) // 零值
+		require.Equal(t, 0, timestamp)
+	})
 }

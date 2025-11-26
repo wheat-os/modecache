@@ -234,6 +234,7 @@ var (
 	ctrStore = sync.Map{}
 )
 
+// Deprecated: use WrapWithTTL
 // Wrap 控制器封装方法，创建默认的控制器, 注意 name 只能够对应一个缓存 T 如果，冲突创建，会引发错误
 // 该方法默认使用 PolicyWarp 策略,应该使用 NewCacheController 来创建自定义的缓存控制器
 // 使用缓存策略 EasyPloy(15 * time.Second)
@@ -253,6 +254,7 @@ func Wrap[T any](ctx context.Context, name string, store Store, key string, quer
 	return *new(T), fmt.Errorf("unable to create a new cache controller, named to be used; name:%s, loadedType:%T", name, ctrIntr)
 }
 
+// // Deprecated: use WrapForReuseIgnoreErrorWithTTL
 // WrapForReuseIgnoreError 重用缓存封装模型, 注意 name 只能够对应一个缓存 T 如果，冲突创建，会引发错误
 // 使用缓存策略 ReuseCachePloy(30 * time.Second)
 // # 注意如果命中缓存，那么当 query 执行失败时，这个策略会重复使用缓存数据，直到 query 执行成功为止。
@@ -278,6 +280,7 @@ func WrapForReuseIgnoreError[T any](ctx context.Context, name string, store Stor
 	return *new(T), fmt.Errorf("unable to create a new cache controller, named to be used; name:%s, loadedType:%T", name, ctrIntr)
 }
 
+// Deprecated: use WrapForReuseIgnoreErrorWithTTL
 // WrapForFirst 优先缓存封装模型, 注意 name 只能够对应一个缓存 T 如果，冲突创建，会引发错误
 // 使用缓存策略 FirstCachePoly(1 * time.Minute)
 // # 注意如果命中缓存，那么当 query 执行失败时，这个策略会重复使用缓存数据，直到 query 执行成功为止。
@@ -363,4 +366,20 @@ func WrapWithTTL[T any](ctx context.Context, store Store, key string, ttl time.D
 		return ctr.Wrap(ctx, key, query)
 	}
 	return *new(T), fmt.Errorf("unable to create a new cache controller, named to be used; name:%s, loadedType:%T", name, ctrIntr)
+}
+
+// SetStore 设置缓存
+func SetStore[T any](ctx context.Context, store Store, key string, value T, ttl time.Duration) error {
+	ctr := CacheCtr[T]{
+		store: store,
+	}
+	return ctr.SetStore(ctx, key, value, ttl)
+}
+
+// GetStore 获取缓存
+func GetStore[T any](ctx context.Context, store Store, key string) (T, int, error) {
+	ctr := CacheCtr[T]{
+		store: store,
+	}
+	return ctr.GetStore(ctx, key)
 }
