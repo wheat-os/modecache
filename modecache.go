@@ -383,3 +383,8 @@ func GetStore[T any](ctx context.Context, store Store, key string) (T, int, erro
 	}
 	return ctr.GetStore(ctx, key)
 }
+
+// DeleteStore 删除缓存
+func DeleteStore(ctx context.Context, store Store, key string) error {
+	return store.Del(ctx, key)
+}
