@@ -11,15 +11,13 @@ func EasyPloy(ttl time.Duration) Policy {
 	sg := SingleflightGroup{}
 
 	return func(ctx context.Context, key string, loadingQuery LoadingForQuery, loadingCache LoadingForCache) (any, error) {
-		value, err, _ := sg.Do(ctx, key, func() (interface{}, error) {
-			value, _, qErr := loadingCache(ctx, key)
-			if qErr == nil {
-				return value, nil
-			}
-			value, dErr := loadingQuery(ctx, key, ttl)
-			return value, dErr
+		value, _, qErr := loadingCache(ctx, key)
+		if qErr == nil {
+			return value, nil
+		}
+		value, err, _ := sg.Do(ctx, key, func() (any, error) {
+			return loadingQuery(ctx, key, ttl)
 		})
-
 		if err != nil {
 			return nil, err
 		}
@@ -36,31 +34,24 @@ func ReuseCachePloyIgnoreError(expireTime time.Duration) Policy {
 	sg := SingleflightGroup{}
 
 	return func(ctx context.Context, key string, loadingQuery LoadingForQuery, loadingCache LoadingForCache) (any, error) {
-		value, err, _ := sg.Do(ctx, key, func() (interface{}, error) {
-			var isReuse = false
-			result, timestamp, cErr := loadingCache(ctx, key)
-			if cErr == nil {
-				isReuse = true
-				if time.Now().Unix()-int64(timestamp) < int64(expireTime.Seconds()) {
-					return result, nil
-				}
-			}
-
-			value, qErr := loadingQuery(ctx, key, ttl)
-			if qErr == nil {
-				return value, nil
-			}
-
-			if isReuse {
+		var isReuse = false
+		result, timestamp, cErr := loadingCache(ctx, key)
+		if cErr == nil {
+			isReuse = true
+			if time.Now().Unix()-int64(timestamp) < int64(expireTime.Seconds()) {
 				return result, nil
 			}
-			return nil, qErr
-		})
-
-		if err != nil {
-			return nil, err
 		}
-		return value, err
+		value, qErr, _ := sg.Do(ctx, key, func() (any, error) {
+			return loadingQuery(ctx, key, ttl)
+		})
+		if qErr == nil {
+			return value, nil
+		}
+		if isReuse {
+			return result, nil
+		}
+		return nil, qErr
 	}
 }
 
@@ -74,40 +65,31 @@ func FirstCachePolyIgnoreError(expireTime time.Duration) Policy {
 	mu := Mutex128{}
 
 	return func(ctx context.Context, key string, loadingQuery LoadingForQuery, loadingCache LoadingForCache) (any, error) {
-		value, err, _ := sg.Do(ctx, key, func() (interface{}, error) {
-			var isReuse bool
-			result, timestamp, cErr := loadingCache(ctx, key)
-			if cErr == nil {
-				isReuse = true
-				if time.Now().Unix()-int64(timestamp) < int64(expireTime.Seconds()) {
-					return result, nil
-				}
+		var isReuse bool
+		result, timestamp, cErr := loadingCache(ctx, key)
+		if cErr == nil {
+			isReuse = true
+			if time.Now().Unix()-int64(timestamp) < int64(expireTime.Seconds()) {
+				return result, nil
 			}
-
-			// 无法重用缓存, 降级为策略模式
-			if !isReuse {
-				return loadingQuery(ctx, key, ttl)
-			}
-
-			// 创建一个携程只允许同时存在 1 个 执行 loadingQuery
-			// 对 key 计算 hash 输出 uint
-			shard := hashCrc32ToUint(key)
-			if mu.TryLock(shard) {
-				GO(func() {
-					defer mu.Unlock(shard)
-					nCtx := context.WithoutCancel(ctx)
-					nCtx, cancel := context.WithTimeout(nCtx, expireTime)
-					defer cancel()
-					_, _ = loadingQuery(nCtx, key, ttl)
-				})
-			}
-
-			return result, nil
-		})
-
-		if err != nil {
-			return nil, err
 		}
-		return value, err
+		// 无法重用缓存, 降级为策略模式
+		if !isReuse {
+			value, err, _ := sg.Do(ctx, key, func() (interface{}, error) {
+				return loadingQuery(ctx, key, ttl)
+			})
+			return value, err
+		}
+		shard := hashCrc32ToUint(key)
+		if mu.TryLock(shard) {
+			GO(func() {
+				defer mu.Unlock(shard)
+				nCtx := context.WithoutCancel(ctx)
+				nCtx, cancel := context.WithTimeout(nCtx, expireTime)
+				defer cancel()
+				_, _ = loadingQuery(nCtx, key, ttl)
+			})
+		}
+		return result, nil
 	}
 }
